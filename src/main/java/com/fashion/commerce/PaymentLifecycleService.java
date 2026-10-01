@@ -155,9 +155,15 @@ public class PaymentLifecycleService {
         // payload is stored as the JSON string it already is and COALESCE resolves
         // text against text. Casting to jsonb here made every verification fail
         // with "COALESCE types jsonb and text cannot be matched".
-       db.update("UPDATE payment_transactions SET status='PAID', provider_payload=COALESCE(?::jsonb, provider_payload), updated_at=now() " +
-        "WHERE order_id=? AND provider='CASHFREE' AND status <> 'PAID'", payload, orderId);
-
+      db.update(
+    "UPDATE payment_transactions " +
+    "SET status='PAID', " +
+    "provider_payload=COALESCE(CAST(? AS jsonb), provider_payload), " +
+    "updated_at=now() " +
+    "WHERE order_id=? AND provider='CASHFREE' AND status <> 'PAID'",
+    payload,
+    orderId
+);
         /*
          * The hold may already be gone if an earlier event released it before the
          * payment actually settled. Cashfree confirming PAID is authoritative, so
@@ -183,8 +189,19 @@ public class PaymentLifecycleService {
         // relabel a confirmed order as failed.
         db.update("UPDATE customer_orders SET payment_status=?, order_status=?, updated_at=now() " +
                 "WHERE id=? AND payment_status NOT IN ('PAID','REFUNDED')", target, orderStatus, orderId);
-        db.update("UPDATE payment_transactions SET status=?, provider_payload=COALESCE(?::jsonb, provider_payload), updated_at=now() " +
-        "WHERE order_id=? AND provider='CASHFREE' AND status <> 'PAID'", target, payload, orderId);
+    
+
+
+        db.update(
+    "UPDATE payment_transactions " +
+    "SET status=?, " +
+    "provider_payload=COALESCE(CAST(? AS jsonb), provider_payload), " +
+    "updated_at=now() " +
+    "WHERE order_id=? AND provider='CASHFREE' AND status <> 'PAID'",
+    target,
+    payload,
+    orderId
+);
         
         int released = inventory.releaseReservation(orderId, "Payment " + target.toLowerCase(Locale.ROOT));
         if (released > 0) {
@@ -202,8 +219,20 @@ public class PaymentLifecycleService {
         // that would re-hold stock the customer is no longer waiting on.
         db.update("UPDATE customer_orders SET payment_status='PENDING', order_status='PAYMENT_PENDING', updated_at=now() " +
                 "WHERE id=? AND payment_status NOT IN ('PAID','REFUNDED','FAILED','CANCELLED','EXPIRED')", orderId);
-       db.update("UPDATE payment_transactions SET status='PENDING', provider_payload=COALESCE(?::jsonb, provider_payload), updated_at=now() " +
-        "WHERE order_id=? AND provider='CASHFREE' AND status <> 'PAID'", payload, orderId);
+       
+
+
+db.update(
+    "UPDATE payment_transactions " +
+    "SET status='PENDING', " +
+    "provider_payload=COALESCE(CAST(? AS jsonb), provider_payload), " +
+    "updated_at=now() " +
+    "WHERE order_id=? AND provider='CASHFREE' AND status <> 'PAID'",
+    payload,
+    orderId
+);
+        
+        
         recordEvent(orderId, source, "PENDING", order, payload);
     }
 
