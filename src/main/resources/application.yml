@@ -1,0 +1,117 @@
+spring:
+  application:
+    name: fashion-backend
+ 
+  
+  datasource:
+    url: jdbc:postgresql://${PGHOST}:${PGPORT}/${PGDATABASE}
+    username: ${PGUSER}
+    password: ${PGPASSWORD}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+  servlet:
+    multipart:
+      max-file-size: ${ASSET_MAX_FILE_SIZE:100MB}
+      max-request-size: ${ASSET_MAX_REQUEST_SIZE:105MB}
+      file-size-threshold: 0B
+server:
+  port: ${PORT:8080}
+  tomcat:
+    max-http-form-post-size: ${ASSET_MAX_REQUEST_SIZE_BYTES:110100480}
+app:
+  cors-origin: ${CORS_ORIGIN:https://frontend-2-beige.vercel.app}
+  jwt-secret: ${JWT_SECRET:}
+  # Single configurable public base URL for the storefront. Payment return URLs
+  # are built from this so no Java code or frontend source has to hardcode a
+  # host, and moving to production is a one-variable change.
+  frontend-base-url: ${APP_FRONTEND_URL:https://frontend-2-beige.vercel.app}
+  payment-result-path: ${APP_PAYMENT_RESULT_PATH:/payment/return}
+  # Public origin of THIS service, used to build the absolute webhook URL handed to
+  # the payment gateway. It must be reachable from the internet in production: when it
+  # is blank, notify_url is omitted, so a payment is only discovered when the customer
+  # comes back to the storefront and payments are lost when they close the tab.
+  public-api-base-url: ${APP_PUBLIC_API_BASE_URL:}
+  password-reset:
+    token-expiry-minutes: ${PASSWORD_RESET_TOKEN_EXPIRY_MINUTES:15}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+  health:
+    # SMTP is not on the request path: browsing, checkout and payment do not need
+    # it, only password-reset email does. With this indicator on by default, an
+    # expired mailbox password or a provider outage made /actuator/health report
+    # DOWN, which failed the container healthcheck and took the whole storefront
+    # offline - an email outage presenting as a total outage. Off by default so
+    # liveness reflects whether we can serve traffic. Set MAIL_HEALTH_ENABLED=true
+    # if mail problems should instead surface as unhealthy.
+    mail:
+      enabled: ${MAIL_HEALTH_ENABLED:false}
+
+# Phase 4: admin status endpoint requires ADMIN_API_KEY environment variable.
+providers:
+  cashfree:
+    # CASHFREE_MODE is the single switch that decides sandbox vs production for
+    # BOTH the server API and the browser SDK. When it is left blank the mode is
+    # derived from CASHFREE_BASE_URL so the two can never disagree, which would
+    # otherwise send sandbox sessions to the production gateway.
+    mode: ${CASHFREE_MODE:}
+    base-url: ${CASHFREE_BASE_URL:https://sandbox.cashfree.com/pg}
+    app-id: ${CASHFREE_APP_ID:}
+    secret-key: ${CASHFREE_SECRET_KEY:}
+    api-version: ${CASHFREE_API_VERSION:2023-08-01}
+    # Webhook URL registered in the Cashfree dashboard, built from the
+    # configurable frontend host so no absolute URL is hardcoded in Java.
+    webhook-path: ${CASHFREE_WEBHOOK_PATH:/api/v1/integrations/cashfree/webhook}
+  shiprocket:
+    base-url: ${SHIPROCKET_BASE_URL:https://apiv2.shiprocket.in/v1/external}
+    email: ${SHIPROCKET_EMAIL:}
+    password: ${SHIPROCKET_PASSWORD:}
+    pickup-postcode: ${SHIPROCKET_PICKUP_PINCODE:}
+    default-weight-kg: ${SHIPROCKET_DEFAULT_PACKAGE_WEIGHT_KG:}
+atelier:
+  assets:
+    provider: ${ASSET_STORAGE_PROVIDER:local}
+    directory: ${ASSET_STORAGE_DIR:./data/assets}
+    public-base-url: ${ASSET_PUBLIC_BASE_URL:http://localhost:8080/assets}
+    s3:
+      endpoint: ${S3_ENDPOINT:}
+      bucket: ${S3_BUCKET:}
+      region: ${S3_REGION:us-east-1}
+      access-key: ${S3_ACCESS_KEY:}
+      secret-key: ${S3_SECRET_KEY:}
+      public-base-url: ${S3_PUBLIC_BASE_URL:}
+  try-on:
+    hf-token: ${HF_TOKEN:}
+    hf-space-id: ${HF_SPACE_ID:}
+    upload-max-bytes: 5242880
+    result-retention-minutes: 30
+  ai:
+    groq:
+      api-key: ${GROQ_API_KEY:}
+      model: ${GROQ_MODEL:openai/gpt-oss-120b}
+      endpoint: ${GROQ_RESPONSES_URL:https://api.groq.com/openai/v1/responses}

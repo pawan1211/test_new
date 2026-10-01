@@ -1,0 +1,3 @@
+/app/src/test/java/com/fashion/catalog/HuggingFaceGradioClientTest.java
+/app/src/test/java/com/fashion/catalog/VirtualTryOnServiceTest.java
+/app/src/test/java/com/fashion/security/PasswordResetServiceTest.java

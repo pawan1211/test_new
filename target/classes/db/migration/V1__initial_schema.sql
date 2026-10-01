@@ -1,0 +1,20 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE app_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email VARCHAR(254) NOT NULL UNIQUE,
+  password_hash VARCHAR(255),
+  full_name VARCHAR(160),
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE roles (
+  id BIGSERIAL PRIMARY KEY,
+  name VARCHAR(50) NOT NULL UNIQUE
+);
+CREATE TABLE user_roles (
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE RESTRICT,
+  PRIMARY KEY(user_id, role_id)
+);
+INSERT INTO roles(name) VALUES ('CUSTOMER'), ('ADMIN'), ('WAREHOUSE'), ('SUPPORT'), ('FINANCE');

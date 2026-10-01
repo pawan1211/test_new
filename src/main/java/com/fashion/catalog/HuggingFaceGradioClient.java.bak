@@ -1,0 +1,633 @@
+package com.fashion.catalog;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStreamReader;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.*;
+
+/** Raw Gradio queue adapter for the published yisol/IDM-VTON Space interface. */
+@Component
+public class HuggingFaceGradioClient {
+    private static final int MAX_RESULT_BYTES = 15 * 1024 * 1024;
+
+    // Injected from configuration rather than held as a literal. The token used
+    // to be a hardcoded field initialiser, so the credential was baked into the
+    // JAR, could not be rotated without a rebuild, and `configured()` reported
+    // "ready" on every deployment regardless of the environment. An empty
+    // configured token is the honest, fail-closed state.
+    private final String token;
+    private final String spaceId;
+
+    private final URI baseUri;
+
+
+
+
+private final HttpClient http =
+        HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
+
+private final ObjectMapper mapper;
+
+private volatile Instant schemaCheckedAt = Instant.EPOCH;
+
+@Autowired
+public HuggingFaceGradioClient(ObjectMapper mapper) {
+    this.mapper = mapper;
+}
+
+
+
+
+
+// @Autowired
+// public HuggingFaceGradioClient(ObjectMapper mapper) {
+//     this(
+//         spaceUri(spaceId),
+//         token,
+//         mapper,
+//         HttpClient.newBuilder()
+//             .connectTimeout(Duration.ofSeconds(10))
+//             .followRedirects(HttpClient.Redirect.NEVER)
+//             .build()
+//     );
+// }
+
+// HuggingFaceGradioClient(
+//         URI baseUri,
+//         String token,
+//         ObjectMapper mapper,
+//         HttpClient http) {
+
+//     this.baseUri = baseUri;
+//     this.token = token == null ? "" : token.trim();
+//     this.mapper = mapper;
+//     this.http = http;
+// }
+
+   private static URI spaceUri(String spaceId) {
+    if (spaceId == null ||
+        !spaceId.matches("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")) {
+        throw new IllegalArgumentException(
+            "Invalid Hugging Face Space ID. Use organization/space-name"
+        );
+    }
+
+    String host = spaceId.replace('/', '-') + ".hf.space";
+
+    return URI.create("https://" + host + "/");
+}
+
+    public boolean configured() { return baseUri != null && !token.isBlank(); }
+
+   public byte[] generate(byte[] person, String personMime,
+                       byte[] garment, String garmentMime,
+                       String garmentDescription) throws ProviderException {
+
+    if (!configured()) {
+        throw new ProviderException(
+                "Hugging Face try-on is not configured.");
+    }
+
+    try {
+        verifyLiveSchema();
+
+        String personPath = upload(
+                person,
+                "customer-photo." + extension(personMime),
+                personMime
+        );
+
+        String garmentPath = upload(
+                garment,
+                "catalog-garment." + extension(garmentMime),
+                garmentMime
+        );
+
+        // Create one session hash and use it for both queue calls.
+        String sessionHash = UUID.randomUUID()
+                .toString()
+                .replace("-", "")
+                .substring(0, 12);
+
+        JsonNode call = enqueue(
+                personPath, person.length, personMime,
+                garmentPath, garment.length, garmentMime,
+                garmentDescription,
+                sessionHash
+        );
+
+        String eventId = call.path("event_id").asText("");
+
+        if (eventId.isBlank()) {
+            throw new ProviderException(
+                    "The try-on Space did not return a queue job ID.");
+        }
+
+        JsonNode completed = await(eventId, sessionHash);
+
+        JsonNode outputs = completed.isArray()
+                ? completed
+                : completed.path("data");
+
+        if (!outputs.isArray() || outputs.isEmpty()
+                || outputs.get(0).isNull()) {
+            throw new ProviderException(
+                    "The try-on Space returned no generated image.");
+        }
+
+        JsonNode result = outputs.get(0);
+
+        String path = result.path("path").asText("");
+
+        if (path.isBlank()) {
+            String url = result.path("url").asText("");
+
+            if (url.isBlank()) {
+                throw new ProviderException(
+                        "The try-on Space returned no image location.");
+            }
+
+            URI parsed = URI.create(url);
+
+            if (parsed.getHost() == null
+                    || !parsed.getHost().equalsIgnoreCase(
+                            baseUri.getHost())) {
+                throw new ProviderException(
+                        "The try-on Space returned an unexpected result location.");
+            }
+
+            return download(parsed);
+        }
+
+        return download(
+                baseUri.resolve("file=" + encodePath(path))
+        );
+
+    } catch (ProviderException e) {
+        throw e;
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new ProviderException(
+                "Try-on processing was interrupted.", e);
+    } catch (Exception e) {
+        throw new ProviderException(
+                "The Hugging Face Space is unavailable or returned an unsupported response.",
+                e);
+    }
+}
+
+
+
+
+private synchronized void verifyLiveSchema() throws Exception {
+    if (schemaCheckedAt.plus(Duration.ofMinutes(5))
+            .isAfter(Instant.now())) {
+        return;
+    }
+
+    HttpRequest.Builder request = HttpRequest.newBuilder(
+                    baseUri.resolve("config"))
+            .timeout(Duration.ofSeconds(20))
+            .GET();
+
+    authorize(request);
+
+    HttpResponse<byte[]> response = http.send(
+            request.build(),
+            HttpResponse.BodyHandlers.ofByteArray()
+    );
+
+    if (response.statusCode() == 429) {
+        throw providerStatus(429);
+    }
+
+    if (response.statusCode() < 200 ||
+            response.statusCode() >= 300) {
+        throw providerStatus(response.statusCode());
+    }
+
+    JsonNode config = mapper.readTree(response.body());
+
+    if (!"4.24.0".equals(config.path("version").asText())) {
+        throw new ProviderException(
+                "Unexpected Gradio version."
+        );
+    }
+
+    JsonNode dependencies = config.path("dependencies");
+
+    boolean foundTryon = false;
+
+    for (JsonNode dependency : dependencies) {
+        if ("tryon".equals(
+                dependency.path("api_name").asText())) {
+            foundTryon = true;
+            break;
+        }
+    }
+
+    if (!foundTryon) {
+        throw new ProviderException(
+                "The Space does not expose the tryon API."
+        );
+    }
+
+    schemaCheckedAt = Instant.now();
+}
+
+   private String upload(byte[] bytes, String filename, String mime)
+        throws Exception {
+
+    String boundary = "atelier-" + UUID.randomUUID();
+
+    byte[] body = multipart(
+            boundary, filename, mime, bytes);
+
+    HttpRequest.Builder request =
+            HttpRequest.newBuilder(baseUri.resolve("upload"))
+                    .timeout(Duration.ofSeconds(45))
+                    .header(
+                            "Content-Type",
+                            "multipart/form-data; boundary=" + boundary)
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+
+    authorize(request);
+
+    HttpResponse<byte[]> response = http.send(
+            request.build(),
+            HttpResponse.BodyHandlers.ofByteArray());
+
+
+
+System.out.println("HF upload status: " + response.statusCode());
+System.out.println("HF upload content type: " +
+    response.headers()
+        .firstValue("content-type")
+        .orElse("<missing>"));
+
+System.out.println("HF upload request ID: " +
+    response.headers()
+        .firstValue("x-request-id")
+        .orElse("<missing>"));
+
+String uploadResponseBody = new String(
+    response.body(),
+    StandardCharsets.UTF_8
+);
+
+System.out.println("HF upload response: " + uploadResponseBody);
+
+    if (response.statusCode() == 429) {
+        throw new ProviderException(
+                "The try-on Space is rate limited. Please try again shortly.");
+    }
+
+    if (response.statusCode() < 200
+            || response.statusCode() >= 300) {
+        throw providerStatus(response.statusCode());
+    }
+
+    JsonNode paths = mapper.readTree(response.body());
+
+    if (!paths.isArray()
+            || paths.isEmpty()
+            || !paths.get(0).isTextual()) {
+        throw new ProviderException(
+                "The try-on Space upload response was not recognized.");
+    }
+
+    return paths.get(0).asText();
+}
+
+  
+private JsonNode enqueue(
+        String personPath, int personSize, String personMime,
+        String garmentPath, int garmentSize, String garmentMime,
+        String description,
+        String sessionHash) throws Exception {
+
+    Map<String, Object> person = fileData(
+            personPath,
+            personSize,
+            personMime,
+            "customer-photo." + extension(personMime)
+    );
+
+    Map<String, Object> garment = fileData(
+            garmentPath,
+            garmentSize,
+            garmentMime,
+            "catalog-garment." + extension(garmentMime)
+    );
+
+
+
+    
+System.out.println("Person FileData: "
+        + mapper.writeValueAsString(person));
+
+System.out.println("Garment FileData: "
+        + mapper.writeValueAsString(garment));
+
+    Map<String, Object> editor = new LinkedHashMap<>();
+    editor.put("background", person);
+    editor.put("layers", List.of());
+   // editor.put("composite", null);
+
+    editor.put("composite", person);
+
+    List<Object> data = List.of(
+            editor,
+            garment,
+            "",
+            true,
+            false,
+            30,
+            42
+    );
+
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("data", data);
+    payload.put("fn_index", 2);
+    payload.put("session_hash", sessionHash);
+
+    payload.put("trigger_id", 25);
+
+    byte[] json = mapper.writeValueAsBytes(payload);
+
+
+    
+
+    // Log only safe request metadata.
+    System.out.println("=== HF TRY-ON DIAGNOSTICS ===");
+    System.out.println("Endpoint: " + baseUri.resolve("queue/join"));
+    System.out.println("Function index: 2");
+    System.out.println("Input count: " + data.size());
+    System.out.println("Person MIME: " + personMime);
+    System.out.println("Person bytes: " + personSize);
+    System.out.println("Garment MIME: " + garmentMime);
+    System.out.println("Garment bytes: " + garmentSize);
+    System.out.println("Description length: "
+            + (description == null ? 0 : description.length()));
+    System.out.println("JSON payload bytes: " + json.length);
+
+    HttpRequest.Builder request =
+            HttpRequest.newBuilder(baseUri.resolve("queue/join"))
+                    .timeout(Duration.ofSeconds(60))
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(json));
+
+    // Keep your existing authorization method.
+    authorize(request);
+
+    HttpResponse<byte[]> response = http.send(
+            request.build(),
+            HttpResponse.BodyHandlers.ofByteArray()
+    );
+
+    int status = response.statusCode();
+
+    String responseBody = new String(
+            response.body(),
+            StandardCharsets.UTF_8
+    );
+
+    System.out.println("HF HTTP status: " + status);
+    System.out.println("HF Content-Type: "
+            + response.headers()
+                    .firstValue("content-type")
+                    .orElse("<missing>"));
+
+    System.out.println("HF request ID: "
+            + response.headers()
+                    .firstValue("x-request-id")
+                    .orElse("<missing>"));
+
+    System.out.println("HF response body: "
+            + (responseBody.length() > 4000
+                    ? responseBody.substring(0, 4000)
+                    : responseBody));
+
+    System.out.println("=== END HF DIAGNOSTICS ===");
+
+    if (status == 429) {
+        throw new ProviderException(
+                "The try-on Space queue is full. Please retry shortly."
+        );
+    }
+
+    if (status < 200 || status >= 300) {
+        throw providerStatus(status);
+    }
+
+    JsonNode result = mapper.readTree(response.body());
+
+    System.out.println("HF enqueue response: "
+            + result.toString());
+
+    return result;
+}
+private JsonNode await(
+        String eventId,
+        String sessionHash) throws Exception {
+
+    if (eventId == null || eventId.isBlank()
+            || !eventId.matches("[A-Za-z0-9_-]{1,180}")) {
+        throw new ProviderException(
+                "The try-on Space returned an invalid queue ID.");
+    }
+
+    if (sessionHash == null
+            || !sessionHash.matches("[A-Za-z0-9_-]{1,100}")) {
+        throw new ProviderException(
+                "The try-on Space returned an invalid session.");
+    }
+
+    String encodedSession = URLEncoder.encode(
+            sessionHash, StandardCharsets.UTF_8);
+
+    URI uri = baseUri.resolve(
+            "queue/data?session_hash=" + encodedSession);
+
+    HttpRequest.Builder request =
+            HttpRequest.newBuilder(uri)
+                    .timeout(Duration.ofMinutes(12))
+                    .header("Accept", "text/event-stream")
+                    .GET();
+
+    authorize(request);
+
+    HttpResponse<java.io.InputStream> response = http.send(
+            request.build(),
+            HttpResponse.BodyHandlers.ofInputStream());
+
+    if (response.statusCode() == 429) {
+        response.body().close();
+
+        throw new ProviderException(
+                "The try-on Space queue is rate limited. Please try again shortly.");
+    }
+
+    if (response.statusCode() < 200
+            || response.statusCode() >= 300) {
+        response.body().close();
+        throw providerStatus(response.statusCode());
+    }
+
+    try (BufferedReader reader = new BufferedReader(
+            new InputStreamReader(
+                    response.body(),
+                    StandardCharsets.UTF_8))) {
+
+        String line;
+        String eventName = "";
+        StringBuilder event = new StringBuilder();
+
+        while ((line = reader.readLine()) != null) {
+
+            if (line.startsWith("event:")) {
+                eventName = line.substring(6).trim();
+            } else if (line.startsWith("data:")) {
+
+                String data = line.substring(5).trim();
+
+                if (data.isEmpty() || "[DONE]".equals(data)) {
+                    continue;
+                }
+
+                event.append(data);
+
+                JsonNode parsed;
+
+                try {
+                    parsed = mapper.readTree(event.toString());
+                } catch (Exception ignored) {
+                    continue;
+                }
+
+                String message = parsed.path("msg").asText("");
+
+                if ("queue_full".equals(message)) {
+                    throw new ProviderException(
+                            "The try-on Space queue is full. Please try again shortly.");
+                }
+
+                if ("process_failed".equals(message)
+                        || "error".equals(eventName)
+                        || parsed.hasNonNull("error")) {
+                    throw new ProviderException(
+                            "The try-on Space could not process these images.");
+                }
+
+                if ("process_completed".equals(message)) {
+
+                    JsonNode output = parsed.path("output");
+
+                    if (output.hasNonNull("error")) {
+                        throw new ProviderException(
+                                "The try-on Space could not generate the image.");
+                    }
+
+                    JsonNode result = output.path("data");
+
+                    if (result.isArray()) {
+                        return result;
+                    }
+
+                    throw new ProviderException(
+                            "The try-on Space completed without a readable result.");
+                }
+
+                // Reset for the next SSE event.
+                event.setLength(0);
+            } else if (line.isEmpty()) {
+                event.setLength(0);
+                eventName = "";
+            }
+        }
+    }
+
+    throw new ProviderException(
+            "The try-on Space ended the queue without a completed result.");
+}
+    private byte[] download(URI uri) throws Exception {
+        if (!uri.getHost().equalsIgnoreCase(baseUri.getHost()) || !"https".equalsIgnoreCase(uri.getScheme())) {
+            throw new ProviderException("The try-on Space returned an unexpected result location.");
+        }
+        HttpRequest.Builder request = HttpRequest.newBuilder(uri).timeout(Duration.ofMinutes(2)).GET();
+        authorize(request);
+        HttpResponse<java.io.InputStream> response = http.send(request.build(), HttpResponse.BodyHandlers.ofInputStream());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            response.body().close(); throw providerStatus(response.statusCode());
+        }
+        try (var in = response.body(); var out = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192]; int n; int total = 0;
+            while ((n = in.read(buffer)) >= 0) { total += n; if (total > MAX_RESULT_BYTES) throw new ProviderException("Generated result exceeded the image size limit."); out.write(buffer, 0, n); }
+            byte[] bytes = out.toByteArray();
+            if (!isPng(bytes) && !isJpeg(bytes)) throw new ProviderException("The try-on Space did not return a PNG or JPEG image.");
+            return bytes;
+        }
+    }
+
+    private void authorize(HttpRequest.Builder request) { request.header("Authorization", "Bearer " + token); }
+    
+private Map<String, Object> fileData(
+        String path,
+        int size,
+        String mime,
+        String name) {
+
+    Map<String, Object> file = new LinkedHashMap<>();
+
+    file.put("path", path);
+    file.put("url", null);
+    file.put("size", size);
+    file.put("orig_name", name);
+    file.put("mime_type", mime);
+
+    Map<String, Object> meta = new LinkedHashMap<>();
+    meta.put("_type", "gradio.FileData");
+
+    file.put("meta", meta);
+
+    return file;
+}
+    private static byte[] multipart(String boundary, String filename, String mime, byte[] bytes) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"files\"; filename=\"" + filename + "\"\r\nContent-Type: " + mime + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(bytes); out.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+        return out.toByteArray();
+    }
+    private static String extension(String mime) { return "image/png".equals(mime) ? "png" : "jpg"; }
+    private static String encodePath(String path) { return URLEncoder.encode(path, StandardCharsets.UTF_8).replace("+", "%20").replace("%2F", "/"); }
+    private static boolean isPng(byte[] b) { return b.length > 8 && (b[0]&255)==137 && b[1]==80 && b[2]==78 && b[3]==71; }
+    private static boolean isJpeg(byte[] b) { return b.length > 3 && (b[0]&255)==255 && (b[1]&255)==216 && (b[b.length-2]&255)==255 && (b[b.length-1]&255)==217; }
+    private static ProviderException providerStatus(int status) {
+        if (status == 401 || status == 403) return new ProviderException("Hugging Face rejected the configured token or Space access.");
+        if (status == 404) return new ProviderException("The configured Hugging Face Space or API endpoint was not found.");
+        if (status == 429) return new ProviderException("The try-on Space is rate limited. Please try again shortly.");
+        return new ProviderException("The Hugging Face Space is temporarily unavailable (HTTP " + status + ").");
+    }
+
+    public static class ProviderException extends Exception {
+        public ProviderException(String message) { super(message); }
+        public ProviderException(String message, Throwable cause) { super(message, cause); }
+    }
+}
