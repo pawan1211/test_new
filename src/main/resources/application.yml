@@ -86,7 +86,7 @@ providers:
     api-version: ${CASHFREE_API_VERSION:2023-08-01}
     # Webhook URL registered in the Cashfree dashboard, built from the
     # configurable frontend host so no absolute URL is hardcoded in Java.
-    webhook-path: ${CASHFREE_WEBHOOK_PATH:/api/v1/integrations/cashfree/webhook}
+    webhook-path: https://testnew-production-4582.up.railway.app/api/v1/integrations/cashfree/webhook
   shiprocket:
     base-url: ${SHIPROCKET_BASE_URL:https://apiv2.shiprocket.in/v1/external}
     email: ${SHIPROCKET_EMAIL:}
