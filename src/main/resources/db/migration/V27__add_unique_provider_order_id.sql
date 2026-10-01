@@ -1,0 +1,2 @@
+CREATE UNIQUE INDEX IF NOT EXISTS ux_payment_transactions_provider_order_id
+ON payment_transactions(provider_order_id);
