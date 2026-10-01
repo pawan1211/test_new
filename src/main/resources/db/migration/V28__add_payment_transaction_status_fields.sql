@@ -1,0 +1,8 @@
+ALTER TABLE payment_transactions
+    ADD COLUMN IF NOT EXISTS status VARCHAR(50) NOT NULL DEFAULT 'PENDING';
+
+ALTER TABLE payment_transactions
+    ADD COLUMN IF NOT EXISTS provider_payload TEXT;
+
+ALTER TABLE payment_transactions
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW();
