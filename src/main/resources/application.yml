@@ -39,12 +39,12 @@ server:
   tomcat:
     max-http-form-post-size: ${ASSET_MAX_REQUEST_SIZE_BYTES:110100480}
 app:
-  cors-origin: ${CORS_ORIGIN:https://frontend-2-beige.vercel.app}
+  cors-origin: ${CORS_ORIGIN:https://atelier-one-chi.vercel.app}
   jwt-secret: ${JWT_SECRET:}
   # Single configurable public base URL for the storefront. Payment return URLs
   # are built from this so no Java code or frontend source has to hardcode a
   # host, and moving to production is a one-variable change.
-  frontend-base-url: ${APP_FRONTEND_URL:https://frontend-2-beige.vercel.app}
+  frontend-base-url: ${APP_FRONTEND_URL:https://atelier-one-chi.vercel.app}
   payment-result-path: ${APP_PAYMENT_RESULT_PATH:/payment/return}
   # Public origin of THIS service, used to build the absolute webhook URL handed to
   # the payment gateway. It must be reachable from the internet in production: when it
@@ -97,7 +97,7 @@ atelier:
   assets:
     provider: ${ASSET_STORAGE_PROVIDER:local}
     directory: ${ASSET_STORAGE_DIR:./data/assets}
-    public-base-url: ${ASSET_PUBLIC_BASE_URL:http://localhost:8080/assets}
+    public-base-url: ${ASSET_PUBLIC_BASE_URL:https://testnew-production-4582.up.railway.app/assets}
     s3:
       endpoint: ${S3_ENDPOINT:}
       bucket: ${S3_BUCKET:}
