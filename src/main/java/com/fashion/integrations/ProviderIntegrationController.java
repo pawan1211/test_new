@@ -350,6 +350,11 @@ public class ProviderIntegrationController {
       return unavailable(orderId, "The payment provider returned an empty response. Please try again.");
     }
 
+    System.out.println(
+    "[CASHFREE VERIFY] order_status=" + result.get("order_status")
+    + ", payment_status=" + result.get("payment_status")
+);
+
     String canonical = payments.mapProviderStatus(
         Objects.toString(result.get("order_status"), ""),
         Objects.toString(result.get("payment_status"), ""));
