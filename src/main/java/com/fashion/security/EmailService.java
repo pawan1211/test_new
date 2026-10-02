@@ -1,4 +1,4 @@
-```java
+
 package com.fashion.security;
 
 import java.net.URI;
@@ -159,4 +159,4 @@ public class EmailService {
                 .replace("'", "&#39;");
     }
 }
-```
+
