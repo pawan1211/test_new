@@ -18,20 +18,7 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-  mail:
-    host: smtp.gmail.com
-    port: 587
-    username: pawan050687@gmail.com
-    password: rykxdfocyjsbdqlr
-    properties:
-      mail:
-        smtp:
-          auth: true
-          starttls:
-            enable: true
-          connectiontimeout: 10000
-          timeout: 10000
-          writetimeout: 10000
+  
   servlet:
     multipart:
       max-file-size: ${ASSET_MAX_FILE_SIZE:100MB}
